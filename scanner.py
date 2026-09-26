@@ -16,12 +16,11 @@ MAX_ATH_RATIO = float(os.getenv("MAX_ATH_RATIO", "0.30"))
 MIN_LIQUIDITY = float(os.getenv("MIN_LIQUIDITY", "50000"))
 MIN_VOLUME_24H = float(os.getenv("MIN_VOLUME_24H", "100000"))
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# 这里已经直接帮你填入了 Telegram 密钥信息
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8757255391:AAHIqVxt9nsuHquQnnZiE0EE2W9UyEda6jo").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1966512463").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if not BOT_TOKEN or not CHAT_ID:
-    raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
 if not DATABASE_URL:
     raise RuntimeError("缺少 DATABASE_URL（请连接 Railway PostgreSQL）")
 
@@ -85,13 +84,11 @@ def fetch_pairs(keys):
     total = len(keys)
     done = 0
     for group in batch(keys, 30):
-        # DexScreener /tokens/v1/{chainId}/{tokenAddresses}
         by_chain = {}
         for chain, addr in group:
             by_chain.setdefault(chain, []).append(addr)
 
         for chain, addrs in by_chain.items():
-            # 同一 chain 最多 30 个地址
             for sub in batch(addrs, 30):
                 url = f"{DEX}/tokens/v1/{chain}/" + ",".join(sub)
                 try:
@@ -104,7 +101,6 @@ def fetch_pairs(keys):
                             key = (chain, token)
                             liq = (p.get("liquidity") or {}).get("usd") or 0
                             vol = (p.get("volume") or {}).get("h24") or 0
-                            # 对同一 token 选择流动性最高的交易对
                             old = by_token.get(key)
                             if old is None or float(liq or 0) > float(old.get("_liq", 0) or 0):
                                 p["_liq"] = float(liq or 0)
@@ -153,7 +149,6 @@ def process(conn, pairs):
             if mcap <= 0 or price <= 0:
                 continue
 
-            # 首次见到的 token：用交易对创建时间作为“年龄”代理。
             age_days = None
             if created:
                 try:
@@ -199,7 +194,6 @@ def process(conn, pairs):
                     mcap, price, liq, vol, chain, addr
                 ))
 
-            # 年龄条件：如果拿不到 pairCreatedAt，就用 first_seen 作为保守代理。
             if age_days is None:
                 cur.execute("""
                     SELECT EXTRACT(EPOCH FROM (NOW() - first_seen))/86400
