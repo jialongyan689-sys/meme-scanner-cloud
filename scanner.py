@@ -262,4 +262,11 @@ def main():
     print("=== 本次扫描结束，程序退出；Railway 会按计划再次运行 ===")
 
 if __name__ == "__main__":
-    main()
+    while True:
+        try:
+            main()
+        except Exception as e:
+            print(f"扫描发生异常: {e}")
+        
+        print("\n休眠 5 分钟后进行下一次扫描...\n")
+        time.sleep(300)  # 300秒 = 5分钟
