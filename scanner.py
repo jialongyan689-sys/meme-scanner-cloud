@@ -1,8 +1,7 @@
 import os
 import time
+import sys
 from datetime import datetime, timezone
-from urllib.parse import urlparse
-
 import requests
 import psycopg2
 from psycopg2.extras import execute_values
@@ -10,15 +9,17 @@ from psycopg2.extras import execute_values
 DEX = "https://api.dexscreener.com"
 TELEGRAM = "https://api.telegram.org/bot{}/sendMessage"
 
+# 指定监控的 5 条链 (DexScreener 内部标识)
+ALLOWED_CHAINS = {"ethereum", "solana", "bsc", "base", "robinhood"}
+
 MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "30"))
 MIN_ATH_MCAP = float(os.getenv("MIN_ATH_MCAP", "20000000"))
 MAX_ATH_RATIO = float(os.getenv("MAX_ATH_RATIO", "0.30"))
 MIN_LIQUIDITY = float(os.getenv("MIN_LIQUIDITY", "50000"))
 MIN_VOLUME_24H = float(os.getenv("MIN_VOLUME_24H", "100000"))
 
-# 这里已经直接帮你填入了 Telegram 密钥信息
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8757255391:AAHIqVxt9nsuHquQnnZiE0EE2W9UyEda6jo").strip()
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1966512463").strip()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 if not DATABASE_URL:
@@ -67,12 +68,13 @@ def discover():
             data = get_json(DEX + endpoint)
             if isinstance(data, list):
                 for x in data:
-                    chain = str(x.get("chainId", "")).strip()
+                    chain = str(x.get("chainId", "")).strip().lower()
                     addr = str(x.get("tokenAddress", "")).strip()
-                    if chain and addr:
+                    # 仅扫描指定的 5 条链
+                    if chain in ALLOWED_CHAINS and addr:
                         found[(chain, addr)] = x
         except Exception as e:
-            print(f"发现接口失败 {endpoint}: {e}")
+            print(f"发现接口失败 {endpoint}: {e}", flush=True)
     return list(found.keys())
 
 def batch(items, n=30):
@@ -107,12 +109,15 @@ def fetch_pairs(keys):
                                 p["_vol"] = float(vol or 0)
                                 by_token[key] = p
                 except Exception as e:
-                    print(f"批量查询失败 chain={chain}: {e}")
+                    print(f"批量查询失败 chain={chain}: {e}", flush=True)
         done += len(group)
-        print(f"已处理候选 {done}/{total}")
+        print(f"已处理候选 {done}/{total}", flush=True)
     return by_token
 
 def send_telegram(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("未配置 Telegram 变量，跳过发送", flush=True)
+        return
     url = TELEGRAM.format(BOT_TOKEN)
     r = requests.post(url, data={
         "chat_id": CHAT_ID,
@@ -199,7 +204,8 @@ def process(conn, pairs):
                     SELECT EXTRACT(EPOCH FROM (NOW() - first_seen))/86400
                     FROM tokens WHERE chain_id=%s AND token_address=%s
                 """, (chain, addr))
-                age_days = float(cur.fetchone()[0] or 0)
+                fetch_res = cur.fetchone()
+                age_days = float(fetch_res[0] or 0) if fetch_res else 0
 
             drawdown_ok = ath >= MIN_ATH_MCAP and mcap <= ath * MAX_ATH_RATIO
             other_ok = (
@@ -225,18 +231,18 @@ def process(conn, pairs):
     return alerts
 
 def main():
-    print("=== Meme Scanner 云端版：本次扫描开始 ===")
-    print(f"条件：年龄≤{MAX_AGE_DAYS}天 | ATH≥{fmt_money(MIN_ATH_MCAP)} | 回撤≥{(1-MAX_ATH_RATIO)*100:.0f}% | 流动性≥{fmt_money(MIN_LIQUIDITY)} | 24h量≥{fmt_money(MIN_VOLUME_24H)}")
+    print("=== Meme Scanner 云端版：本次扫描开始 ===", flush=True)
+    print(f"条件：年龄≤{MAX_AGE_DAYS}天 | ATH≥{fmt_money(MIN_ATH_MCAP)} | 回撤≥{(1-MAX_ATH_RATIO)*100:.0f}% | 流动性≥{fmt_money(MIN_LIQUIDITY)} | 24h量≥{fmt_money(MIN_VOLUME_24H)}", flush=True)
 
     conn = db()
     try:
         init_db(conn)
         keys = discover()
-        print(f"发现候选 Token：{len(keys)}")
+        print(f"发现候选 Token：{len(keys)}", flush=True)
         pairs = fetch_pairs(keys)
-        print(f"拿到有效交易对：{len(pairs)}")
+        print(f"拿到有效交易对：{len(pairs)}", flush=True)
         alerts = process(conn, pairs)
-        print(f"本次命中：{len(alerts)}")
+        print(f"本次命中：{len(alerts)}", flush=True)
 
         for a in alerts:
             msg = (
@@ -254,19 +260,19 @@ def main():
             )
             try:
                 send_telegram(msg)
-                print(f"Telegram 已发送：{a['symbol']}")
+                print(f"Telegram 已发送：{a['symbol']}", flush=True)
             except Exception as e:
-                print(f"Telegram 发送失败 {a['symbol']}: {e}")
+                print(f"Telegram 发送失败 {a['symbol']}: {e}", flush=True)
     finally:
         conn.close()
-    print("=== 本次扫描结束，程序退出；Railway 会按计划再次运行 ===")
+    print("=== 本次扫描结束 ===", flush=True)
 
 if __name__ == "__main__":
     while True:
         try:
             main()
         except Exception as e:
-            print(f"扫描发生异常: {e}")
+            print(f"扫描过程发生捕获异常: {e}", flush=True)
         
-        print("\n休眠 5 分钟后进行下一次扫描...\n")
-        time.sleep(300)  # 300秒 = 5分钟
+        print("\n休眠 5 分钟后进行下一次扫描...\n", flush=True)
+        time.sleep(300)
